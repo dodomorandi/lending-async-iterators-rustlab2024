@@ -1,16 +1,10 @@
-#![feature(
-    type_alias_impl_trait,
-    async_fn_traits,
-    unboxed_closures,
-    async_closure
-)]
+#![feature(type_alias_impl_trait)]
 
 pub mod embassy_net;
 pub mod lending_iterator;
 
 use std::{
     future::Future,
-    ops::AsyncFnMut,
     pin::{pin, Pin},
     task::{self, Poll},
 };
@@ -64,11 +58,11 @@ pub trait LendingAsyncIteratorExt: LendingAsyncIterator {
         Self: Sized,
         for<'a> P: FnMut(&Self::Item<'a>) -> bool;
 
-    // fn for_each<F>(self, f: F) -> ForEach<Self, F>
-    // where
-    //     Self: Sized,
-    //     for<'a> F: FnMut(Self::Item<'a>);
-    //
+    fn for_each<F>(self, f: F) -> ForEach<Self, F>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>);
+
     // fn for_each_async<F>(self, f: F) -> ForEachAsync<Self, F>
     // where
     //     Self: Sized,
@@ -97,17 +91,17 @@ where
         }
     }
 
-    // fn for_each<F>(self, f: F) -> ForEach<Self, F>
-    // where
-    //     Self: Sized,
-    //     for<'a> F: FnMut(Self::Item<'a>),
-    // {
-    //     ForEach {
-    //         async_iter: self,
-    //         f,
-    //     }
-    // }
-    //
+    fn for_each<F>(self, f: F) -> ForEach<Self, F>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>),
+    {
+        ForEach {
+            async_iter: self,
+            f,
+        }
+    }
+
     // fn for_each_async<F>(self, f: F) -> ForEachAsync<Self, F>
     // where
     //     Self: Sized,
@@ -189,40 +183,40 @@ where
 pub trait Captures<T> {}
 impl<T, U: ?Sized> Captures<T> for U {}
 
-// #[pin_project]
-// #[must_use]
-// pub struct ForEach<I, F> {
-//     #[pin]
-//     async_iter: I,
-//     f: F,
-// }
-//
-// impl<I, F> Future for ForEach<I, F>
-// where
-//     I: LendingAsyncIterator,
-//     for<'a> F: FnMut(I::Item<'a>),
-// {
-//     type Output = ();
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-//         let mut this = self.project();
-//         while let Some(element) = task::ready!(this.async_iter.as_mut().poll_next(cx)) {
-//             (this.f)(element);
-//         }
-//
-//         Poll::Ready(())
-//     }
-// }
-
 #[pin_project]
 #[must_use]
-pub struct ForEachAsync<I, F, Fut> {
+pub struct ForEach<I, F> {
     #[pin]
     async_iter: I,
     f: F,
-    #[pin]
-    fut: Option<Fut>,
 }
+
+impl<I, F> Future for ForEach<I, F>
+where
+    I: LendingAsyncIterator,
+    for<'a> F: FnMut(I::Item<'a>),
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        while let Some(element) = task::ready!(this.async_iter.as_mut().poll_next(cx)) {
+            (this.f)(element);
+        }
+
+        Poll::Ready(())
+    }
+}
+
+// #[pin_project]
+// #[must_use]
+// pub struct ForEachAsync<I, F, Fut> {
+//     #[pin]
+//     async_iter: I,
+//     f: F,
+//     #[pin]
+//     fut: Option<Fut>,
+// }
 
 // impl<I, F, Fut> Future for ForEachAsync<I, F, Fut>
 // where
@@ -315,23 +309,23 @@ mod tests {
         }
     }
 
-    // #[tokio::test]
-    // async fn test() {
-    //     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-    //     struct A(i32);
+    #[tokio::test]
+    async fn test() {
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        struct A(i32);
 
-    //     let mut nums = [1, 2, 3, 4, 5, 6, 7, 8].map(A);
-    //     DemoLendingAsyncIterator::new(
-    //         nums.iter_mut(),
-    //         4,
-    //         Duration::from_millis(0)..Duration::from_millis(50),
-    //     )
-    //     .filter(|value| value.0 % 2 != 0)
-    //     .for_each(|val| {
-    //         val.0 *= 4;
-    //     })
-    //     .await;
+        let mut nums = [1, 2, 3, 4, 5, 6, 7, 8].map(A);
+        DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            4,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        )
+        .filter(|value| value.0 % 2 != 0)
+        .for_each(|val| {
+            val.0 *= 4;
+        })
+        .await;
 
-    //     assert_eq!(nums, [4, 2, 12, 4, 20, 6, 28, 8].map(A));
-    // }
+        assert_eq!(nums, [4, 2, 12, 4, 20, 6, 28, 8].map(A));
+    }
 }
