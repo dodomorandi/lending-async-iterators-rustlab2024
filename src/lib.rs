@@ -1,7 +1,12 @@
 #![feature(type_alias_impl_trait)]
+#![feature(async_closure)]
+#![feature(async_fn_traits)]
+#![feature(unboxed_closures)]
 
 pub mod embassy_net;
+pub mod lending_future;
 pub mod lending_iterator;
+mod unsafe_pinned;
 
 use std::{
     future::Future,
@@ -9,15 +14,8 @@ use std::{
     task::{self, Poll},
 };
 
+use lending_future::LendingFuture;
 use pin_project::pin_project;
-
-pub trait LendingFuture {
-    type Item<'a>
-    where
-        Self: 'a;
-
-    fn poll<'a>(self: Pin<&'a mut Self>, cx: &mut task::Context) -> Poll<Self::Item<'a>>;
-}
 
 pub trait LendingAsyncIterator {
     type Item<'a>
@@ -46,37 +44,9 @@ pub trait LendingAsyncIterator {
     {
         Pin::new(self).poll_next(cx)
     }
-}
 
-pub trait LendingAsyncIteratorExt: LendingAsyncIterator {
-    fn next(&mut self) -> Next<'_, Self>
-    where
-        Self: Unpin;
-
-    fn filter<P>(self, predicate: P) -> Filter<Self, P>
-    where
-        Self: Sized,
-        for<'a> P: FnMut(&Self::Item<'a>) -> bool;
-
-    fn for_each<F>(self, f: F) -> ForEach<Self, F>
-    where
-        Self: Sized,
-        for<'a> F: FnMut(Self::Item<'a>);
-
-    // fn for_each_async<F>(self, f: F) -> ForEachAsync<Self, F>
-    // where
-    //     Self: Sized,
-    //     for<'a> F: AsyncFnMut(Self::Item<'a>);
-}
-
-impl<I> LendingAsyncIteratorExt for I
-where
-    I: LendingAsyncIterator,
-{
-    fn next(&mut self) -> Next<'_, Self>
-    where
-        Self: Unpin,
-    {
+    #[must_use]
+    fn next(&mut self) -> Next<'_, Self> {
         Next(self)
     }
 
@@ -122,13 +92,14 @@ impl<'a, T> LendingFuture for Next<'a, T>
 where
     T: ?Sized + LendingAsyncIterator + Unpin,
 {
-    type Item<'i> = Option<T::Item<'i>>
+    type Output<'i> = Option<T::Item<'i>>
     where
         Self: 'i;
 
     #[inline]
-    fn poll<'b>(self: Pin<&'b mut Self>, cx: &mut task::Context) -> Poll<Self::Item<'b>> {
-        Pin::into_inner(self).0.poll_next_unpin(cx)
+    fn poll<'b>(self: Pin<&'b mut Self>, cx: &mut task::Context) -> Poll<Self::Output<'b>> {
+        let inner = Pin::into_inner(self);
+        Pin::new(&mut *inner.0).poll_next(cx)
     }
 }
 
@@ -179,9 +150,6 @@ where
         Poll::Ready(None)
     }
 }
-
-pub trait Captures<T> {}
-impl<T, U: ?Sized> Captures<T> for U {}
 
 #[pin_project]
 #[must_use]
@@ -234,8 +202,9 @@ where
 mod tests {
     use std::{
         future::Future,
+        marker::PhantomPinned,
         ops::Range,
-        pin::Pin,
+        pin::{pin, Pin},
         task::{self, Poll},
         time::Duration,
     };
@@ -243,7 +212,9 @@ mod tests {
     use rand::{thread_rng, Rng};
     use tokio::time::{sleep, Sleep};
 
-    use crate::{LendingAsyncIterator, LendingAsyncIteratorExt};
+    use crate::lending_future::LendingFuture;
+
+    use super::LendingAsyncIterator;
 
     struct DemoLendingAsyncIterator<I: Iterator> {
         iter: I,
@@ -310,7 +281,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test() {
+    async fn next() {
+        #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        struct A(i32, PhantomPinned);
+
+        let mut nums = [1, 2, 3].map(|x| A(x, PhantomPinned));
+        let demo = pin!(DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            2,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        ));
+
+        demo.next()
+            .then(async |value| {
+                assert_eq!(value.unwrap().0, 1);
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn filter_for_each() {
         #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         struct A(i32);
 

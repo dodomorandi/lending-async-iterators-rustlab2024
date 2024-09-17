@@ -4,19 +4,7 @@ pub trait LendingIterator {
         Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>>;
-}
 
-pub trait Ext: LendingIterator {
-    fn filter<P>(self, predicate: P) -> Filter<Self, P>
-    where
-        Self: Sized,
-        for<'a> P: FnMut(&Self::Item<'a>) -> bool;
-}
-
-impl<I> Ext for I
-where
-    I: LendingIterator,
-{
     fn filter<P>(self, predicate: P) -> Filter<Self, P>
     where
         Self: Sized,

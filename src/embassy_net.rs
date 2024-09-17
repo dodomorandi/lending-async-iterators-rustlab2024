@@ -6,19 +6,18 @@ use std::{
 
 use embassy_net::tcp::TcpReader;
 use pin_project::pin_project;
-use tcp_reader_read_future::TcpReaderReadFuture;
+use tcp_reader_read_future_dumb::TcpReaderReadFuture;
 
 use crate::LendingAsyncIterator;
 
 #[pin_project(project = TcpReaderLendingAsyncIteratorProj)]
-pub struct TcpReaderLendingAsyncIterator<'d, const BUF_SIZE: usize> {
+pub struct TcpReaderLendingAsyncIteratorDumb<'d, const BUF_SIZE: usize> {
     #[pin]
     status: Status<'d, BUF_SIZE>,
-    pos: usize,
 }
 
 impl<'d, const BUF_SIZE: usize> LendingAsyncIterator
-    for TcpReaderLendingAsyncIterator<'d, BUF_SIZE>
+    for TcpReaderLendingAsyncIteratorDumb<'d, BUF_SIZE>
 {
     type Item<'a> = Result<&'a [u8], embassy_net::tcp::Error>
     where
@@ -28,20 +27,14 @@ impl<'d, const BUF_SIZE: usize> LendingAsyncIterator
         let mut this = self.as_mut().project();
 
         match this.status.as_mut().project() {
-            TcpReaderOrReadFutureProj::Data { buffer, .. } => {
-                if *this.pos > BUF_SIZE / 2 {
-                    buffer.copy_within((*this.pos).., 0);
-                    *this.pos = 0;
-                }
-
+            TcpReaderOrReadFutureProj::Data { .. } => {
                 let TcpReaderOrReadFutureProjOwn::Data { tcp_reader, buffer } =
                     this.status.as_mut().project_replace(Status::Invalid)
                 else {
                     unreachable!();
                 };
 
-                let pos = *this.pos;
-                let future = tcp_reader_read_future::create(tcp_reader, buffer, pos);
+                let future = tcp_reader_read_future_dumb::create(tcp_reader, buffer);
                 this.status.set(Status::Future(future));
 
                 let TcpReaderOrReadFutureProj::Future(future) = this.status.project() else {
@@ -61,7 +54,7 @@ impl<'d, const BUF_SIZE: usize> LendingAsyncIterator
     }
 }
 
-impl<'d, const BUF_SIZE: usize> TcpReaderLendingAsyncIterator<'d, BUF_SIZE> {
+impl<'d, const BUF_SIZE: usize> TcpReaderLendingAsyncIteratorDumb<'d, BUF_SIZE> {
     fn handle_future_result<'a>(
         self: Pin<&'a mut Self>,
         result: Result<usize, embassy_net::tcp::Error>,
@@ -76,21 +69,13 @@ impl<'d, const BUF_SIZE: usize> TcpReaderLendingAsyncIterator<'d, BUF_SIZE> {
 
         Poll::Ready(
             result
-                .map(|bytes_read| {
-                    (bytes_read != 0).then(|| {
-                        let pos = *this.pos;
-                        let out = &buffer[pos..(pos + bytes_read)];
-                        *this.pos += bytes_read;
-
-                        out
-                    })
-                })
+                .map(|bytes_read| (bytes_read != 0).then(|| &buffer[..bytes_read]))
                 .transpose(),
         )
     }
 }
 
-mod tcp_reader_read_future {
+mod tcp_reader_read_future_dumb {
     use std::future::Future;
 
     use embassy_net::tcp::TcpReader;
@@ -106,10 +91,9 @@ mod tcp_reader_read_future {
     pub(super) fn create<const BUF_SIZE: usize>(
         mut tcp_reader: TcpReader<'_>,
         mut buffer: [u8; BUF_SIZE],
-        pos: usize,
     ) -> TcpReaderReadFuture<'_, BUF_SIZE> {
         async move {
-            let result = tcp_reader.read(&mut buffer[pos..]).await;
+            let result = tcp_reader.read(&mut buffer).await;
             (result, tcp_reader, buffer)
         }
     }
