@@ -125,7 +125,7 @@ where
         self: Pin<&'a mut Self>,
         cx: &mut task::Context,
     ) -> Poll<Option<Self::Item<'a>>> {
-        // let this = self.project();
+        // let mut this = self.project();
         //
         // while let Some(element) = task::ready!(this.async_iter.as_mut().poll_next(cx)) {
         //     if (this.predicate)(&element) {
