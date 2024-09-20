@@ -6,7 +6,7 @@
 pub mod embassy_net;
 pub mod lending_future;
 pub mod lending_iterator;
-mod unsafe_pinned;
+pub mod unsafe_pinned;
 
 use std::{
     future::Future,
@@ -286,15 +286,30 @@ mod tests {
         struct A(i32, PhantomPinned);
 
         let mut nums = [1, 2, 3].map(|x| A(x, PhantomPinned));
-        let demo = pin!(DemoLendingAsyncIterator::new(
+        let mut demo = pin!(DemoLendingAsyncIterator::new(
             nums.iter_mut(),
             2,
             Duration::from_millis(0)..Duration::from_millis(50),
         ));
 
         demo.next()
-            .then(async |value| {
+            .detach(|value| {
                 assert_eq!(value.unwrap().0, 1);
+            })
+            .await;
+        demo.next()
+            .detach(|value| {
+                assert_eq!(value.unwrap().0, 2);
+            })
+            .await;
+        demo.next()
+            .detach(|value| {
+                assert_eq!(value.unwrap().0, 3);
+            })
+            .await;
+        demo.next()
+            .detach(|value| {
+                assert!(value.is_none());
             })
             .await;
     }

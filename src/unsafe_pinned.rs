@@ -38,6 +38,7 @@ impl<T: ?Sized> UnsafePinned<T> {
     }
 
     /// Get read-write access to the contents of a pinned `UnsafePinned`.
+    #[must_use]
     pub fn get_mut_pinned(self: Pin<&mut Self>) -> *mut T {
         // SAFETY: we're not using `get_unchecked_mut` to unpin anything
         unsafe { ptr::addr_of_mut!(self.get_unchecked_mut().value) }
@@ -48,18 +49,20 @@ impl<T: ?Sized> UnsafePinned<T> {
     /// This means that if there is mutation of the `T`, future reads from the
     /// `*const T` returned here are UB!
     ///
-    /// ```rust
+    /// ```rust,ignore
+    /// # use std::{ptr::addr_of_mut, pin::pin};
+    /// # use lending_async_iterator::unsafe_pinned::UnsafePinned;
     /// unsafe {
     ///     let mut x = UnsafePinned::new(0);
     ///     let ref1 = &mut *addr_of_mut!(x);
-    ///     let ref2 = &mut *addr_of_mut!(x);
+    ///     let ref2 = pin!(&mut *addr_of_mut!(x));
     ///     let ptr = ref1.get(); // read-only pointer, assumes immutability
     ///     ref2.get_mut().write(1);
     ///     ptr.read(); // UB!
     /// }
     /// ```
     pub fn get(&self) -> *const T {
-        self as *const _ as *const T
+        ptr::from_ref(self) as *const T
     }
 
     pub fn raw_get_mut(this: *mut Self) -> *mut T {
