@@ -50,6 +50,11 @@ pub trait LendingAsyncIterator {
         Next(self)
     }
 
+    #[must_use]
+    fn next_pinned<'a>(self: Pin<&'a mut Self>) -> NextPinned<'a, Self> {
+        NextPinned(self)
+    }
+
     fn filter<P>(self, predicate: P) -> Filter<Self, P>
     where
         Self: Sized,
@@ -72,6 +77,18 @@ pub trait LendingAsyncIterator {
         }
     }
 
+    fn fold<Acc, FoldFn>(self, init: Acc, fold: FoldFn) -> Fold<Self, Acc, FoldFn>
+    where
+        Self: Sized,
+        for<'a> FoldFn: FnMut(Acc, Self::Item<'a>) -> Acc,
+    {
+        Fold {
+            async_iter: self,
+            acc: Some(init),
+            fold,
+        }
+    }
+
     // fn for_each_async<F>(self, f: F) -> ForEachAsync<Self, F>
     // where
     //     Self: Sized,
@@ -82,6 +99,41 @@ pub trait LendingAsyncIterator {
     //         f,
     //         fut: None,
     //     }
+    // }
+
+    // async fn all<F>(mut self, mut f: F) -> bool
+    // where
+    //     Self: Sized,
+    //     for<'a> F: FnMut(Self::Item<'a>) -> bool,
+    // {
+    //     let this = pin!(self);
+    //     loop {
+    //         let this = this
+    //         .as_mut();
+    //         let next_pinned = this
+    //         .next_pinned();
+    //         let fut = next_pinned
+    //         .detach(|item| item.map(&mut f));
+    //         let Some(is_valid) = fut.await else {
+    //             break;
+    //         }
+    //
+    //         if is_valid.not() {
+    //             return false;
+    //         }
+    //     }
+    //
+    //     // while let Some(is_valid) = this
+    //     //     .as_mut()
+    //     //     .next_pinned()
+    //     //     .detach(|item| item.map(&mut f))
+    //     //     .await
+    //     // {
+    //     //     if is_valid.not() {
+    //     //         return false;
+    //     //     }
+    //     // }
+    //     true
     // }
 }
 
@@ -100,6 +152,25 @@ where
     fn poll<'b>(self: Pin<&'b mut Self>, cx: &mut task::Context) -> Poll<Self::Output<'b>> {
         let inner = Pin::into_inner(self);
         Pin::new(&mut *inner.0).poll_next(cx)
+    }
+}
+
+#[derive(Debug)]
+#[pin_project]
+pub struct NextPinned<'a, T: ?Sized>(Pin<&'a mut T>);
+
+impl<'a, T> LendingFuture for NextPinned<'a, T>
+where
+    T: ?Sized + LendingAsyncIterator,
+{
+    type Output<'i> = Option<T::Item<'i>>
+    where
+        Self: 'i;
+
+    #[inline]
+    fn poll<'b>(self: Pin<&'b mut Self>, cx: &mut task::Context) -> Poll<Self::Output<'b>> {
+        let this = self.project();
+        this.0.as_mut().poll_next(cx)
     }
 }
 
@@ -197,6 +268,41 @@ where
 //         todo!()
 //     }
 // }
+
+#[pin_project]
+#[must_use]
+pub struct Fold<I, Acc, FoldFn> {
+    #[pin]
+    async_iter: I,
+    acc: Option<Acc>,
+    fold: FoldFn,
+}
+
+impl<I, Acc, FoldFn> Future for Fold<I, Acc, FoldFn>
+where
+    I: LendingAsyncIterator,
+    for<'a> FoldFn: FnMut(Acc, I::Item<'a>) -> Acc,
+{
+    type Output = Acc;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+        let mut this = self.project();
+        while let Some(element) = task::ready!(this.async_iter.as_mut().poll_next(cx)) {
+            *this.acc = Some((this.fold)(
+                this.acc
+                    .take()
+                    .expect("Fold future can only be resolved once"),
+                element,
+            ));
+        }
+
+        Poll::Ready(
+            this.acc
+                .take()
+                .expect("Fold future can only be resolved once"),
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {

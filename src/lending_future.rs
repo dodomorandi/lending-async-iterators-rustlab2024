@@ -17,7 +17,7 @@ pub trait LendingFuture {
     fn detach<F, O>(self, f: F) -> Detach<Self, F, O>
     where
         Self: Sized,
-        for<'b> F: FnOnce(Self::Output<'b>) -> O,
+        for<'b> F: FnMut(Self::Output<'b>) -> O,
     {
         Detach {
             lending_fut: self,
