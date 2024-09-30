@@ -33,11 +33,11 @@ where
         Self: 'a;
 
     fn next(&mut self) -> Option<Self::Item<'_>> {
-        while let Some(element) = self.iter.next() {
-            if (self.predicate)(&element) {
-                return Some(element);
-            }
-        }
+        // while let Some(element) = self.iter.next() {
+        //     if (self.predicate)(&element) {
+        //         return Some(element);
+        //     }
+        // }
 
         None
     }

@@ -9,7 +9,8 @@ pub mod lending_iterator;
 pub mod unsafe_pinned;
 
 use std::{
-    future::Future,
+    future::{self, poll_fn, Future},
+    ops::Not,
     pin::{pin, Pin},
     task::{self, Poll},
 };
@@ -66,14 +67,31 @@ pub trait LendingAsyncIterator {
         }
     }
 
-    fn for_each<F>(self, f: F) -> ForEach<Self, F>
+    // fn for_each<F>(self, f: F) -> ForEach<Self, F>
+    // where
+    //     Self: Sized,
+    //     for<'a> F: FnMut(Self::Item<'a>),
+    // {
+    //     ForEach {
+    //         async_iter: self,
+    //         f,
+    //     }
+    // }
+
+    fn for_each<F>(self, mut f: F) -> impl Future<Output = ()>
     where
         Self: Sized,
         for<'a> F: FnMut(Self::Item<'a>),
     {
-        ForEach {
-            async_iter: self,
-            f,
+        async move {
+            let mut this = pin!(self);
+            poll_fn(|cx| {
+                while let Some(element) = task::ready!(this.as_mut().poll_next(cx)) {
+                    f(element);
+                }
+                Poll::Ready(())
+            })
+            .await;
         }
     }
 
@@ -101,40 +119,25 @@ pub trait LendingAsyncIterator {
     //     }
     // }
 
-    // async fn all<F>(mut self, mut f: F) -> bool
-    // where
-    //     Self: Sized,
-    //     for<'a> F: FnMut(Self::Item<'a>) -> bool,
-    // {
-    //     let this = pin!(self);
-    //     loop {
-    //         let this = this
-    //         .as_mut();
-    //         let next_pinned = this
-    //         .next_pinned();
-    //         let fut = next_pinned
-    //         .detach(|item| item.map(&mut f));
-    //         let Some(is_valid) = fut.await else {
-    //             break;
-    //         }
-    //
-    //         if is_valid.not() {
-    //             return false;
-    //         }
-    //     }
-    //
-    //     // while let Some(is_valid) = this
-    //     //     .as_mut()
-    //     //     .next_pinned()
-    //     //     .detach(|item| item.map(&mut f))
-    //     //     .await
-    //     // {
-    //     //     if is_valid.not() {
-    //     //         return false;
-    //     //     }
-    //     // }
-    //     true
-    // }
+    fn all<F>(self, mut f: F) -> impl Future<Output = bool>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>) -> bool,
+    {
+        async move {
+            let mut this = pin!(self);
+            future::poll_fn(move |cx| {
+                while let Some(item) = task::ready!(this.as_mut().poll_next(cx)) {
+                    if f(item).not() {
+                        return Poll::Ready(false);
+                    }
+                }
+
+                Poll::Ready(true)
+            })
+            .await
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -144,7 +147,8 @@ impl<'a, T> LendingFuture for Next<'a, T>
 where
     T: ?Sized + LendingAsyncIterator + Unpin,
 {
-    type Output<'i> = Option<T::Item<'i>>
+    type Output<'i>
+        = Option<T::Item<'i>>
     where
         Self: 'i;
 
@@ -163,7 +167,8 @@ impl<'a, T> LendingFuture for NextPinned<'a, T>
 where
     T: ?Sized + LendingAsyncIterator,
 {
-    type Output<'i> = Option<T::Item<'i>>
+    type Output<'i>
+        = Option<T::Item<'i>>
     where
         Self: 'i;
 
@@ -188,7 +193,8 @@ where
     I: LendingAsyncIterator,
     for<'a> P: FnMut(&I::Item<'a>) -> bool,
 {
-    type Item<'a> = I::Item<'a>
+    type Item<'a>
+        = I::Item<'a>
     where
         Self: 'a;
 
@@ -349,7 +355,8 @@ mod tests {
         I: Iterator + Unpin,
         I::Item: Unpin,
     {
-        type Item<'a> = &'a mut I::Item
+        type Item<'a>
+            = &'a mut I::Item
         where
             Self: 'a;
 
