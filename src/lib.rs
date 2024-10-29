@@ -128,7 +128,7 @@ pub trait LendingAsyncIterator {
 #[derive(Debug)]
 pub struct Next<'a, T: ?Sized>(&'a mut T);
 
-impl<'a, T> LendingFuture for Next<'a, T>
+impl<T> LendingFuture for Next<'_, T>
 where
     T: ?Sized + LendingAsyncIterator + Unpin,
 {
@@ -148,7 +148,7 @@ where
 #[pin_project]
 pub struct NextPinned<'a, T: ?Sized>(Pin<&'a mut T>);
 
-impl<'a, T> LendingFuture for NextPinned<'a, T>
+impl<T> LendingFuture for NextPinned<'_, T>
 where
     T: ?Sized + LendingAsyncIterator,
 {
