@@ -1,7 +1,4 @@
 #![feature(type_alias_impl_trait)]
-#![feature(async_closure)]
-#![feature(async_fn_traits)]
-#![feature(unboxed_closures)]
 
 pub mod embassy_net;
 pub mod lending_future;
@@ -10,14 +7,13 @@ pub mod unsafe_pinned;
 
 use std::{
     future::{self, poll_fn, Future},
-    ops::{AsyncFnMut, Not},
+    ops::Not,
     pin::{pin, Pin},
     task::{self, Poll},
 };
 
 use lending_future::LendingFuture;
 use pin_project::pin_project;
-use unsafe_pinned::UnsafePinned;
 
 pub trait LendingAsyncIterator {
     type Item<'a>
@@ -105,49 +101,6 @@ pub trait LendingAsyncIterator {
             async_iter: self,
             acc: Some(init),
             fold,
-        }
-    }
-
-    fn for_each_async<F>(self, mut f: F) -> impl Future<Output = ()>
-    where
-        Self: Sized,
-        for<'a> F: AsyncFnMut(Self::Item<'a>),
-    {
-        async move {
-            let mut this = pin!(UnsafePinned::new(self));
-            let mut fut = None::<F::CallRefFuture<'_>>;
-            future::poll_fn(|cx| {
-                if let Some(fut_ref) = fut.as_mut() {
-                    // SAFETY: we are not going to move the pinned future until resolved. At that
-                    // point, it will be dropped.
-                    let pinned_fut = unsafe { Pin::new_unchecked(fut_ref) };
-                    task::ready!(pinned_fut.poll(cx));
-                    fut = None;
-                }
-
-                loop {
-                    // SAFETY: the lifetime of this will flow into the future. The future will then
-                    // be dropped before accessing `this` again.
-                    let this_unpinned_ref = unsafe { &mut *this.as_mut().get_mut_pinned() };
-
-                    // SAFETY: this was already pinned before.
-                    let this_pinned_ref = unsafe { Pin::new_unchecked(this_unpinned_ref) };
-
-                    let Some(item) = task::ready!(this_pinned_ref.poll_next(cx)) else {
-                        break;
-                    };
-                    let fut_ref = fut.insert(f(item));
-
-                    // SAFETY: we are not going to move the pinned future until resolved. At that
-                    // point, it will be dropped.
-                    let pinned_fut = unsafe { Pin::new_unchecked(fut_ref) };
-                    task::ready!(pinned_fut.poll(cx));
-                    fut = None;
-                }
-
-                Poll::Ready(())
-            })
-            .await
         }
     }
 
@@ -284,25 +237,6 @@ where
         Poll::Ready(())
     }
 }
-
-// #[must_use]
-// pub struct ForEachAsync<I, F, Fut> {
-//     async_iter: UnsafePinned<I>,
-//     f: F,
-//     fut: Option<Fut>,
-// }
-
-// impl<I, F, Fut> Future for ForEachAsync<I, F, Fut>
-// where
-//     I: LendingAsyncIterator,
-//     for<'a> F: AsyncFnMut<(I::Item<'a>,), CallMutFuture<'a> = Fut>,
-// {
-//     type Output = ();
-//
-//     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-//         todo!()
-//     }
-// }
 
 #[pin_project]
 #[must_use]
