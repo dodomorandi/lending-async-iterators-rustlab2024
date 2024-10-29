@@ -123,6 +123,26 @@ pub trait LendingAsyncIterator {
             .await
         }
     }
+
+    fn any<F>(self, mut f: F) -> impl Future<Output = bool>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>) -> bool,
+    {
+        async move {
+            let mut this = pin!(self);
+            future::poll_fn(move |cx| {
+                while let Some(item) = task::ready!(this.as_mut().poll_next(cx)) {
+                    if f(item) {
+                        return Poll::Ready(true);
+                    }
+                }
+
+                Poll::Ready(false)
+            })
+            .await
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -429,6 +449,30 @@ mod tests {
             Duration::from_millis(0)..Duration::from_millis(50),
         )
         .all(|&mut &mut n| n < 8)
+        .await;
+
+        assert!(result.not());
+    }
+
+    #[tokio::test]
+    async fn any() {
+        let mut nums = [1, 2, 3, 4, 5, 6, 7, 8];
+        let result = DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            4,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        )
+        .any(|&mut &mut n| n > 7)
+        .await;
+
+        assert!(result);
+
+        let result = DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            4,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        )
+        .any(|&mut &mut n| n > 8)
         .await;
 
         assert!(result.not());
