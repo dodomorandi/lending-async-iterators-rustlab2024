@@ -150,6 +150,17 @@ pub trait LendingAsyncIterator {
     {
         self
     }
+
+    fn chain<U>(
+        self,
+        other: U,
+    ) -> Chain<Self, <U as IntoLendingAsyncIterator>::IntoLendingAsyncIter>
+    where
+        Self: Sized,
+        for<'a> U: IntoLendingAsyncIterator<Item<'a> = Self::Item<'a>>,
+    {
+        todo!()
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
@@ -172,6 +183,13 @@ where
         let repinned = unsafe { Pin::new_unchecked(&mut **inner) };
         repinned.poll_next(cx)
     }
+}
+
+pub trait IntoLendingAsyncIterator {
+    type Item<'a>;
+    type IntoLendingAsyncIter: for<'a> LendingAsyncIterator<Item<'a> = Self::Item<'a>>;
+
+    fn into_lending_async_iter(self) -> Self::IntoLendingAsyncIter;
 }
 
 #[derive(Debug)]
@@ -319,6 +337,51 @@ where
                 .take()
                 .expect("Fold future can only be resolved once"),
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Chain<A, B> {
+    a: Option<A>,
+    b: Option<B>,
+}
+
+impl<A, B> LendingAsyncIterator for Chain<A, B>
+where
+    A: LendingAsyncIterator,
+    for<'a> B: LendingAsyncIterator<Item<'a> = A::Item<'a>>,
+{
+    type Item<'a>
+        = A::Item<'a>
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        // SAFETY: we are going to pin-project both `a` and `b`
+        let this = unsafe { Pin::get_unchecked_mut(self) };
+
+        if let Some(a) = &mut this.a {
+            // SAFETY: we pin-projected from Pin<&mut Option<A>> to Option<Pin<&mut A>>
+            let a = unsafe { Pin::new_unchecked(a) };
+            match task::ready!(a.poll_next(cx)) {
+                Some(item) => return Poll::Ready(Some(item)),
+                None => this.a = None,
+            }
+        }
+
+        if let Some(b) = &mut this.b {
+            // SAFETY: we pin-projected from Pin<&mut Option<B>> to Option<Pin<&mut B>>
+            let b = unsafe { Pin::new_unchecked(b) };
+            match task::ready!(b.poll_next(cx)) {
+                Some(item) => return Poll::Ready(Some(item)),
+                None => this.b = None,
+            }
+        }
+
+        Poll::Ready(None)
     }
 }
 
