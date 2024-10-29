@@ -278,7 +278,7 @@ mod tests {
     use std::{
         future::Future,
         marker::PhantomPinned,
-        ops::Range,
+        ops::{Not, Range},
         pin::{pin, Pin},
         task::{self, Poll},
         time::Duration,
@@ -408,5 +408,29 @@ mod tests {
         .await;
 
         assert_eq!(nums, [4, 2, 12, 4, 20, 6, 28, 8].map(A));
+    }
+
+    #[tokio::test]
+    async fn all() {
+        let mut nums = [1, 2, 3, 4, 5, 6, 7, 8];
+        let result = DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            4,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        )
+        .all(|&mut &mut n| n < 10)
+        .await;
+
+        assert!(result);
+
+        let result = DemoLendingAsyncIterator::new(
+            nums.iter_mut(),
+            4,
+            Duration::from_millis(0)..Duration::from_millis(50),
+        )
+        .all(|&mut &mut n| n < 8)
+        .await;
+
+        assert!(result.not());
     }
 }
