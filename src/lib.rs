@@ -143,6 +143,13 @@ pub trait LendingAsyncIterator {
             .await
         }
     }
+
+    fn by_ref(&mut self) -> &mut Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
