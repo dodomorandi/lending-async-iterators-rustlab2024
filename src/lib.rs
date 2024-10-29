@@ -145,6 +145,28 @@ pub trait LendingAsyncIterator {
     }
 }
 
+impl<I> LendingAsyncIterator for &mut I
+where
+    I: LendingAsyncIterator,
+{
+    type Item<'a>
+        = I::Item<'a>
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        // SAFETY: see `Pin::as_deref_mut`
+        let inner = unsafe { self.get_unchecked_mut() };
+
+        // SAFETY: it was already pinned before
+        let repinned = unsafe { Pin::new_unchecked(&mut **inner) };
+        repinned.poll_next(cx)
+    }
+}
+
 #[derive(Debug)]
 pub struct Next<'a, T: ?Sized>(&'a mut T);
 
