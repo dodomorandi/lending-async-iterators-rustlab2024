@@ -150,6 +150,24 @@ pub trait LendingAsyncIterator {
     {
         self
     }
+
+    fn count(self) -> impl Future<Output = usize>
+    where
+        Self: Sized,
+    {
+        async {
+            let mut this = pin!(self);
+            poll_fn(move |cx| {
+                let mut count = 0;
+                while task::ready!(this.as_mut().poll_next(cx)).is_some() {
+                    count += 1;
+                }
+
+                Poll::Ready(count)
+            })
+            .await
+        }
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
