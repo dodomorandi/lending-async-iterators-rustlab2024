@@ -16,10 +16,11 @@ pub struct TcpReaderLendingAsyncIteratorDumb<'d, const BUF_SIZE: usize> {
     status: Status<'d, BUF_SIZE>,
 }
 
-impl<'d, const BUF_SIZE: usize> LendingAsyncIterator
-    for TcpReaderLendingAsyncIteratorDumb<'d, BUF_SIZE>
+impl<const BUF_SIZE: usize> LendingAsyncIterator
+    for TcpReaderLendingAsyncIteratorDumb<'_, BUF_SIZE>
 {
-    type Item<'a> = Result<&'a [u8], embassy_net::tcp::Error>
+    type Item<'a>
+        = Result<&'a [u8], embassy_net::tcp::Error>
     where
         Self: 'a;
 

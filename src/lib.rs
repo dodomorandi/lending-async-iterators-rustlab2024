@@ -168,6 +168,100 @@ pub trait LendingAsyncIterator {
             .await
         }
     }
+
+    fn cycle(self) -> Cycle<Self>
+    where
+        Self: Sized + Clone,
+    {
+        Cycle {
+            original: self.clone(),
+            current: self,
+            read_item: false,
+        }
+    }
+
+    fn enumerate(self) -> Enumerate<Self>
+    where
+        Self: Sized,
+    {
+        Enumerate {
+            iter: self,
+            index: 0,
+        }
+    }
+
+    fn eq<I>(self, other: I) -> impl Future<Output = bool>
+    where
+        I: IntoLendingAsyncIterator,
+        for<'a> Self::Item<'a>: PartialEq<I::Item<'a>>,
+        Self: Sized,
+    {
+        self.eq_by(other, |a, b| a == b)
+    }
+
+    fn eq_by<I, F>(self, other: I, mut eq: F) -> impl Future<Output = bool>
+    where
+        I: IntoLendingAsyncIterator,
+        for<'a> Self::Item<'a>: PartialEq<I::Item<'a>>,
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>, I::Item<'a>) -> bool,
+    {
+        enum State<A, B> {
+            Polling,
+            AReady(A),
+            BReady(B),
+        }
+
+        async move {
+            let mut this = pin!(self);
+            let mut other = pin!(other.into_lending_async_iter());
+            let mut state = State::Polling;
+
+            future::poll_fn(|cx| loop {
+                match &state {
+                    State::Polling => {
+                        match (this.as_mut().poll_next(cx), other.as_mut().poll_next(cx)) {
+                            (Poll::Pending, Poll::Pending) => break Poll::Pending,
+                            (Poll::Ready(Some(a)), Poll::Ready(Some(b))) => {
+                                if eq(a, b).not() {
+                                    break Poll::Ready(false);
+                                }
+                            }
+                            (Poll::Ready(None), Poll::Ready(None)) => break Poll::Ready(true),
+                            (Poll::Ready(_), Poll::Ready(_)) => break Poll::Ready(false),
+                            (Poll::Ready(a), Poll::Pending) => {
+                                state = State::AReady(a);
+                                break Poll::Pending;
+                            }
+                            (Poll::Pending, Poll::Ready(b)) => {
+                                state = State::BReady(b);
+                                break Poll::Pending;
+                            }
+                        }
+                    }
+                    State::AReady(_) => {
+                        let b = task::ready!(other.as_mut().poll_next(cx));
+                        let State::AReady(a) = std::mem::replace(&mut state, State::Polling) else {
+                            unreachable!()
+                        };
+                        if matches!((a, b), (Some(a), Some(b)) if a == b).not() {
+                            break Poll::Ready(false);
+                        }
+                    }
+                    State::BReady(_) => {
+                        let a = task::ready!(this.as_mut().poll_next(cx));
+                        let State::BReady(b) = std::mem::replace(&mut state, State::Polling) else {
+                            unreachable!()
+                        };
+                        if matches!((a, b), (Some(a), Some(b)) if a == b).not() {
+                            break Poll::Ready(false);
+                        }
+                    }
+                }
+            })
+            .await
+        }
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
@@ -344,6 +438,82 @@ where
                 .take()
                 .expect("Fold future can only be resolved once"),
         )
+    }
+}
+
+#[derive(Debug, Clone)]
+#[pin_project]
+pub struct Cycle<I> {
+    original: I,
+    #[pin]
+    current: I,
+    read_item: bool,
+}
+
+impl<I> LendingAsyncIterator for Cycle<I>
+where
+    I: LendingAsyncIterator + Clone,
+{
+    type Item<'a>
+        = I::Item<'a>
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        let this = self.project();
+        // SAFETY: not going to overwrite this, only reusing this after pinning it
+        let current = unsafe { Pin::get_unchecked_mut(this.current) };
+        // SAFETY: already pinned, projecting pin after reborrow
+        match task::ready!(unsafe { Pin::new_unchecked(&mut *current) }.poll_next(cx)) {
+            None if *this.read_item => {
+                // SAFETY: already pinned, in this branch the reference is already dropped
+                // let mut current = unsafe { Pin::new_unchecked(&mut *current) };
+                // current.set(this.original.clone());
+                // current.poll_next(cx)
+                todo!()
+            }
+            None => Poll::Ready(None),
+            item => {
+                *this.read_item = true;
+                Poll::Ready(item)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[pin_project]
+pub struct Enumerate<I> {
+    #[pin]
+    iter: I,
+    index: usize,
+}
+
+impl<I> LendingAsyncIterator for Enumerate<I>
+where
+    I: LendingAsyncIterator,
+{
+    type Item<'a>
+        = (usize, I::Item<'a>)
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        let this = self.project();
+        this.iter.poll_next(cx).map(|opt_item| {
+            opt_item.map(|item| {
+                let index = *this.index;
+                *this.index += 1;
+
+                (index, item)
+            })
+        })
     }
 }
 
