@@ -7,7 +7,7 @@ pub mod unsafe_pinned;
 
 use std::{
     future::{self, poll_fn, Future},
-    ops::Not,
+    ops::{ControlFlow, Not},
     pin::{pin, Pin},
     task::{self, Poll},
 };
@@ -199,64 +199,92 @@ pub trait LendingAsyncIterator {
         self.eq_by(other, |a, b| a == b)
     }
 
-    fn eq_by<I, F>(self, other: I, mut eq: F) -> impl Future<Output = bool>
+    fn eq_by<I, F>(mut self, other: I, mut eq: F) -> impl Future<Output = bool>
     where
         I: IntoLendingAsyncIterator,
         for<'a> Self::Item<'a>: PartialEq<I::Item<'a>>,
         Self: Sized,
         for<'a> F: FnMut(Self::Item<'a>, I::Item<'a>) -> bool,
     {
-        enum State<A, B> {
-            Polling,
-            AReady(A),
-            BReady(B),
+        enum State<IterA, IterB, ItemA, ItemB> {
+            Polling { iter_a: IterA, iter_b: IterB },
+            AReady { item_a: ItemA, iter_b: IterB },
+            BReady { iter_a: IterA, item_b: ItemB },
+            Dummy,
         }
 
         async move {
             let mut this = pin!(self);
             let mut other = pin!(other.into_lending_async_iter());
-            let mut state = State::Polling;
+            let mut state = State::Polling {
+                iter_a: this.as_mut(),
+                iter_b: other.as_mut(),
+            };
 
             future::poll_fn(|cx| loop {
-                match &state {
-                    State::Polling => {
-                        match (this.as_mut().poll_next(cx), other.as_mut().poll_next(cx)) {
-                            (Poll::Pending, Poll::Pending) => break Poll::Pending,
-                            (Poll::Ready(Some(a)), Poll::Ready(Some(b))) => {
-                                if eq(a, b).not() {
-                                    break Poll::Ready(false);
+                match std::mem::replace(&mut state, State::Dummy) {
+                    State::Polling { iter_a, iter_b } => {
+                        let cf =
+                            match (iter_a.as_mut().poll_next(cx), iter_b.as_mut().poll_next(cx)) {
+                                (Poll::Pending, Poll::Pending) => ControlFlow::Break(Poll::Pending),
+                                (Poll::Ready(Some(a)), Poll::Ready(Some(b))) => {
+                                    if eq(a, b).not() {
+                                        ControlFlow::Break(Poll::Ready(false))
+                                    } else {
+                                        ControlFlow::Continue(())
+                                    }
                                 }
-                            }
-                            (Poll::Ready(None), Poll::Ready(None)) => break Poll::Ready(true),
-                            (Poll::Ready(_), Poll::Ready(_)) => break Poll::Ready(false),
-                            (Poll::Ready(a), Poll::Pending) => {
-                                state = State::AReady(a);
-                                break Poll::Pending;
-                            }
-                            (Poll::Pending, Poll::Ready(b)) => {
-                                state = State::BReady(b);
-                                break Poll::Pending;
-                            }
+                                (Poll::Ready(None), Poll::Ready(None)) => {
+                                    ControlFlow::Break(Poll::Ready(true))
+                                }
+                                (Poll::Ready(_), Poll::Ready(_)) => {
+                                    ControlFlow::Break(Poll::Ready(false))
+                                }
+                                (Poll::Ready(item_a), Poll::Pending) => {
+                                    state = State::AReady {
+                                        item_a,
+                                        iter_b: other.as_mut(),
+                                    };
+                                    break Poll::Pending;
+                                }
+                                (Poll::Pending, Poll::Ready(item_b)) => {
+                                    state = State::BReady {
+                                        iter_a: this.as_mut(),
+                                        item_b,
+                                    };
+                                    break Poll::Pending;
+                                }
+                            };
+
+                        state = State::Polling { iter_a, iter_b };
+
+                        if let ControlFlow::Break(poll) = cf {
+                            break poll;
                         }
                     }
-                    State::AReady(_) => {
-                        let b = task::ready!(other.as_mut().poll_next(cx));
-                        let State::AReady(a) = std::mem::replace(&mut state, State::Polling) else {
-                            unreachable!()
+                    State::AReady { item_a, mut iter_b } => {
+                        let item_b = task::ready!(iter_b.as_mut().poll_next(cx));
+                        let eq_items = matches!((item_a, item_b), (Some(a), Some(b)) if a == b);
+                        state = State::Polling {
+                            iter_a: this.as_mut(),
+                            iter_b,
                         };
-                        if matches!((a, b), (Some(a), Some(b)) if a == b).not() {
+                        if eq_items.not() {
                             break Poll::Ready(false);
                         }
                     }
-                    State::BReady(_) => {
-                        let a = task::ready!(this.as_mut().poll_next(cx));
-                        let State::BReady(b) = std::mem::replace(&mut state, State::Polling) else {
-                            unreachable!()
+                    State::BReady { iter_a, item_b } => {
+                        let item_a = task::ready!(iter_a.as_mut().poll_next(cx));
+                        let eq_items = matches!((item_a, item_b), (Some(a), Some(b)) if a == b);
+                        state = State::Polling {
+                            iter_a: this.as_mut(),
+                            iter_b: other.as_mut(),
                         };
-                        if matches!((a, b), (Some(a), Some(b)) if a == b).not() {
+                        if eq_items.not() {
                             break Poll::Ready(false);
                         }
                     }
+                    State::Dummy => unreachable!(),
                 }
             })
             .await
