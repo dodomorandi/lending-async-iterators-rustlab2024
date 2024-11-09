@@ -200,6 +200,13 @@ pub trait LendingAsyncIterator {
             f,
         }
     }
+
+    fn fuse(self) -> Fuse<Self>
+    where
+        Self: Sized,
+    {
+        Fuse(Some(self))
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
@@ -230,6 +237,8 @@ pub trait IntoLendingAsyncIterator {
 
     fn into_lending_async_iter(self) -> Self::IntoLendingAsyncIter;
 }
+
+pub trait FusedLendingAsyncIterator: Iterator {}
 
 #[derive(Debug)]
 pub struct Next<'a, T: ?Sized>(&'a mut T);
@@ -464,36 +473,70 @@ pub struct FilterMap<I, F> {
     f: F,
 }
 
-impl<I, F, B> LendingAsyncIterator for FilterMap<I, F>
-where
-    I: LendingAsyncIterator,
-    for<'a> F: FnMut(Self::Item<'a>) -> B,
-{
-    type Item<'a>
-        = I::Item<'a>
-    where
-        Self: 'a;
+// impl<I, F, B> LendingAsyncIterator for FilterMap<I, F>
+// where
+//     I: LendingAsyncIterator,
+//     for<'a> F: FnMut(Self::Item<'a>) -> B,
+// {
+//     type Item<'a>
+//         = I::Item<'a>
+//     where
+//         Self: 'a;
+//
+//     fn poll_next<'a>(
+//         self: Pin<&'a mut Self>,
+//         cx: &mut task::Context,
+//     ) -> Poll<Option<Self::Item<'a>>> {
+//         let Self { async_iter, f } = self.project();
+//         // SAFETY: we are not going to override or invalidate it, we just need to reborrow the
+//         // internal mutable reference.
+//         let async_iter = unsafe { Pin::get_mut_unchecked(async_iter) };
+//
+//         // SAFETY: we are re-pinning something that was already pinned.
+//         while let Some(element) =
+//             task::ready!(unsafe { Pin::new_unchecked(&*async_iter) }.poll_next(cx))
+//         {
+//             if let Some(element) = f(element) {
+//                 return Poll::Ready(Some(element));
+//             }
+//         }
+//         Poll::Ready(None)
+//     }
+// }
 
-    fn poll_next<'a>(
-        self: Pin<&'a mut Self>,
-        cx: &mut task::Context,
-    ) -> Poll<Option<Self::Item<'a>>> {
-        let Self { async_iter, f } = self.project();
-        // SAFETY: we are not going to override or invalidate it, we just need to reborrow the
-        // internal mutable reference.
-        let async_iter = unsafe { Pin::get_mut_unchecked(async_iter) };
-
-        // SAFETY: we are re-pinning something that was already pinned.
-        while let Some(element) =
-            task::ready!(unsafe { Pin::new_unchecked(&*async_iter) }.poll_next(cx))
-        {
-            if let Some(element) = f(element) {
-                return Poll::Ready(Some(element));
-            }
-        }
-        Poll::Ready(None)
-    }
-}
+// #[derive(Debug)]
+// pub struct Fuse<I>(Option<I>);
+//
+// impl<I> LendingAsyncIterator for Fuse<I>
+// where
+//     I: LendingAsyncIterator,
+// {
+//     type Item<'a>
+//         = I::Item<'a>
+//     where
+//         Self: 'a;
+//
+//     fn poll_next<'a>(
+//         self: Pin<&'a mut Self>,
+//         cx: &mut task::Context,
+//     ) -> Poll<Option<Self::Item<'a>>> {
+//         // SAFETY: we don't overwrite/invalidate self, we are reborrowing and pin projecting.
+//         let this = unsafe { self.get_unchecked_mut() };
+//         let Some(iter) = &mut this.0 else {
+//             return Poll::Ready(None);
+//         };
+//
+//         // SAFETY: we are reborrowing and pin projecting.
+//         match unsafe {Pin::new_unchecked(iter)}.poll_next(cx) {
+//             Poll::Ready(item @ Some(_)) => Poll::Ready(item),
+//             Poll::Ready(None) => {
+//                 this.0 = None;
+//                 Poll::Ready(None)
+//             }
+//             Poll::Pending => Poll::Pending,
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
