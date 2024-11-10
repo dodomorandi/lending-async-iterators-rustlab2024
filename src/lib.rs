@@ -166,6 +166,17 @@ pub trait LendingAsyncIterator {
             index: 0,
         }
     }
+
+    fn inspect<F>(self, f: F) -> Inspect<Self, F>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(&Self::Item<'a>),
+    {
+        Inspect {
+            async_iter: self,
+            f,
+        }
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
@@ -344,6 +355,37 @@ where
                 (index, item)
             })
         })
+    }
+}
+
+#[derive(Debug)]
+#[pin_project]
+pub struct Inspect<I, F> {
+    #[pin]
+    async_iter: I,
+    f: F,
+}
+
+impl<I, F> LendingAsyncIterator for Inspect<I, F>
+where
+    I: LendingAsyncIterator,
+    for<'a> F: FnMut(&I::Item<'a>),
+{
+    type Item<'a>
+        = I::Item<'a>
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        let this = self.project();
+        let item = task::ready!(this.async_iter.poll_next(cx));
+        if let Some(item) = &item {
+            (this.f)(item);
+        }
+        Poll::Ready(item)
     }
 }
 
