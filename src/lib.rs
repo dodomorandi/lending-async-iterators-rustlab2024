@@ -189,6 +189,17 @@ pub trait LendingAsyncIterator {
             index: 0,
         }
     }
+
+    fn filter_map<F, B>(self, f: F) -> FilterMap<Self, F>
+    where
+        Self: Sized,
+        for<'a> F: FnMut(Self::Item<'a>) -> B,
+    {
+        FilterMap {
+            async_iter: self,
+            f,
+        }
+    }
 }
 
 impl<I> LendingAsyncIterator for &mut I
@@ -443,6 +454,48 @@ where
                 (index, item)
             })
         })
+    }
+}
+
+#[derive(Debug)]
+#[pin_project]
+pub struct FilterMap<I, F> {
+    #[pin]
+    async_iter: I,
+    f: F,
+}
+
+// This compiles, but this does not actually work.
+impl<I, F, B> LendingAsyncIterator for FilterMap<I, F>
+where
+    I: LendingAsyncIterator,
+    for<'a> F: FnMut(I::Item<'a>) -> Option<B>,
+{
+    type Item<'a>
+        = B
+    where
+        Self: 'a;
+
+    fn poll_next<'a>(
+        self: Pin<&'a mut Self>,
+        cx: &mut task::Context,
+    ) -> Poll<Option<Self::Item<'a>>> {
+        let this = self.project();
+        let async_iter = this.async_iter;
+        let f = this.f;
+        // SAFETY: we are not going to override or invalidate it, we just need to reborrow the
+        // internal mutable reference.
+        let async_iter = unsafe { async_iter.get_unchecked_mut() };
+
+        // SAFETY: we are re-pinning something that was already pinned.
+        while let Some(element) =
+            task::ready!(unsafe { Pin::new_unchecked(&mut *async_iter) }.poll_next(cx))
+        {
+            if let Some(element) = f(element) {
+                return Poll::Ready(Some(element));
+            }
+        }
+        Poll::Ready(None)
     }
 }
 
