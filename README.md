@@ -1,7 +1,12 @@
 # Exploring lending async iterators
 
-This repository contains some code related to the [talk given during RustLab
-2024](https://docs.google.com/presentation/d/1Z166168WqGkkWhTtoJPupw9jWJIfO0n8Ftxo45N4lQk/).
+This repository contains some code related to the talk given during RustLab
+2024.
+
+The video of the talk can be found [on
+YouTube](https://youtu.be/lxerexnkdzw?si=AQaHPruOEqiBaf88), and the slides on
+[Google
+Slides](https://docs.google.com/presentation/d/1Z166168WqGkkWhTtoJPupw9jWJIfO0n8Ftxo45N4lQk/).
 
 **Important notice**: in order to being able to compile the code, you need:
 - a nightly compiler
